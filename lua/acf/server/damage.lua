@@ -230,60 +230,64 @@ do -- Explosions ----------------------------
 				local FragPower     = PowerFraction - BlastPower
 				local AreaAdjusted 	= (Ent.ACF.Area / ACF.Threshold) * Feathering
 
-				local FragHit 		= math.floor(FragCount * AreaFraction)
+				do -- Frag damage
+					local FragHit = math.floor(FragCount * AreaFraction)
 
-				if FragHit > 0 then -- A fragment hit
-					local FragKE  = ACF_Kinetic(FragVel * (Distance * 0.5 / BlastRadius), FragMass)
-					local FragRes = ACF.Damage(Ent, FragKE, FragArea, ImpactAngle, Inflictor, math.random(0, 10), Gun, "Frag", FragHit)
+					if FragHit > 0 then -- A fragment hit
+						local FragKE  = ACF_Kinetic(FragVel * (Distance * 0.5 / BlastRadius), FragMass)
+						local FragRes = ACF.Damage(Ent, FragKE, FragArea, ImpactAngle, Inflictor, math.random(0, 10), Gun, "Frag", FragHit)
 
-					TotalPower = TotalPower - FragKE.Kinetic * FragCount * FragRes.Loss -- Removing the energy spent towards this prop
+						TotalPower = TotalPower - FragKE.Kinetic * FragCount * FragRes.Loss -- Removing the energy spent towards this prop
 
-					if FragRes.Kill then -- Killed the ent
-						Filter[#Filter + 1] = Ent -- Filter just in case
-						Loop = true -- Check for new targets since something was killed
+						if FragRes.Kill then -- Killed the ent
+							Filter[#Filter + 1] = Ent -- Filter just in case
+							Loop = true -- Check for new targets since something was killed
 
-						debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 0, 0), true)
+							debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 0, 0), true)
 
-						continue
-					else
-						if FragRes.Overkill > 0 then -- Fragment penetrated
-							Filter[#Filter + 1] = Ent -- Filter out penetrated entity
-
-							debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 255, 0), true)
-							Loop = true -- Check for new targets since something was penetrated
+							continue
 						else
-							debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 255, 255), true)
-						end
+							if FragRes.Overkill > 0 then -- Fragment penetrated
+								Filter[#Filter + 1] = Ent -- Filter out penetrated entity
 
-						if ACF.HEPush then
-							Shove(Ent, Origin, Displacement:GetNormalized(), FragPower * FragRes.Loss)
+								debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 255, 0), true)
+								Loop = true -- Check for new targets since something was penetrated
+							else
+								debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 255, 255), true)
+							end
+
+							if ACF.HEPush then
+								Shove(Ent, Origin, Displacement:GetNormalized(), FragPower * FragRes.Loss)
+							end
 						end
 					end
 				end
 
-				local BlastDmg = { Penetration = BlastPower ^ ACF.HEBlastPen * AreaAdjusted }
-				local BlastRes = ACF.Damage(Ent, BlastDmg, AreaAdjusted, ImpactAngle, Inflictor, math.random(0, 10), Gun, "HE")
+				do -- Blast damage
+					local BlastDmg = { Penetration = BlastPower ^ ACF.HEBlastPen * AreaAdjusted }
+					local BlastRes = ACF.Damage(Ent, BlastDmg, AreaAdjusted, ImpactAngle, Inflictor, math.random(0, 10), Gun, "HE")
 
-				TotalPower = TotalPower - BlastPower * BlastRes.Loss
+					TotalPower = TotalPower - BlastPower * BlastRes.Loss
 
-				if BlastRes.Kill then -- Blast killed something
-					Filter[#Filter + 1] = Ent -- Filter out the dead prop
+					if BlastRes.Kill then -- Blast killed something
+						Filter[#Filter + 1] = Ent -- Filter out the dead prop
 
-					local Debris = ACF.HEKill(Ent, Displacement:GetNormalized(), BlastPower, Origin) -- Make some debris
+						local Debris = ACF.HEKill(Ent, Displacement:GetNormalized(), BlastPower, Origin) -- Make some debris
 
-					for Fireball in pairs(Debris) do
-						if IsValid(Fireball) then Filter[#Filter + 1] = Fireball end -- Filter that out too
-					end
+						for Fireball in pairs(Debris) do
+							if IsValid(Fireball) then Filter[#Filter + 1] = Fireball end -- Filter that out too
+						end
 
-					Loop = true -- Check for new targets since something died, maybe we'll find something new
-				else
-					if BlastRes.Overkill > 0 then -- Blast penetrated
-						Filter[#Filter + 1] = Ent
-						Loop = true
-					end
+						Loop = true -- Check for new targets since something died, maybe we'll find something new
+					else
+						if BlastRes.Overkill > 0 then -- Blast penetrated
+							Filter[#Filter + 1] = Ent
+							Loop = true
+						end
 
-					if ACF.HEPush then -- Just damaged, not killed, so push on it some
-						Shove(Ent, Origin, Displacement:GetNormalized(), BlastPower * BlastRes.Loss)
+						if ACF.HEPush then -- Just damaged, not killed, so push on it some
+							Shove(Ent, Origin, Displacement:GetNormalized(), BlastPower * BlastRes.Loss)
+						end
 					end
 				end
 			end
