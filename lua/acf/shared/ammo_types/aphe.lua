@@ -17,12 +17,13 @@ end
 
 function Ammo:GetDisplayData(Data)
 	local Display  = Ammo.BaseClass.GetDisplayData(self, Data)
-	local FragMass = Data.ProjMass - Data.FillerMass
+	local Blast    = ACF.ConvertHE(Data.FillerMass, Data.ProjMass - Data.FillerMass)
 
-	Display.BlastRadius = Data.FillerMass ^ 0.33 * 8
-	Display.Fragments   = math.max(math.floor((Data.FillerMass / FragMass) * ACF.HEFrag), 2)
-	Display.FragMass    = FragMass / Display.Fragments
-	Display.FragVel     = (Data.FillerMass * ACF.HEPower * 1000 / Display.FragMass / Display.Fragments) ^ 0.5
+	Display.BlastRadius = Blast.BlastRadius
+	Display.Fragments   = Blast.FragCount
+	Display.FragMass    = Blast.FragMass
+	Display.FragVel     = Blast.FragVel
+	Display.FragPen     = Blast.FragPen
 
 	hook.Run("ACF_GetDisplayData", self, Data, Display)
 
@@ -104,10 +105,10 @@ if SERVER then
 
 	function Ammo:GetCrateText(BulletData)
 		local BaseText = Ammo.BaseClass.GetCrateText(self, BulletData)
-		local Text	   = BaseText .. "\nBlast Radius: %s m\nBlast Energy: %s KJ"
+		local Text	   = BaseText .. "\nBlast Radius: %s m\nBlast Energy: %s KJ\nFrag Penetration: %s mm"
 		local Data	   = self:GetDisplayData(BulletData)
 
-		return Text:format(math.Round(Data.BlastRadius, 2), math.Round(BulletData.FillerMass * ACF.HEPower, 2))
+		return Text:format(math.Round(Data.BlastRadius, 2), math.Round(BulletData.FillerMass * ACF.HEPower, 2), math.Round(Data.FragPen))
 	end
 
 	function Ammo:OnFlightEnd(Bullet, Trace)
@@ -174,12 +175,14 @@ else
 		FillerStats:DefineSetter(function()
 			self:UpdateRoundData(ToolData, BulletData)
 
-			local Text	   = "Blast Radius : %s m\nFragments : %s\nFragment Mass : %s\nFragment Velocity : %s m/s"
-			local Blast	   = math.Round(BulletData.BlastRadius, 2)
-			local FragMass = ACF.GetProperMass(BulletData.FragMass)
-			local FragVel  = math.Round(BulletData.FragVel, 2)
+			local Text	      = "Blast Radius : %s m\nTotal Energy: %skg\nBlast Energy: %skj\nFragment Energy: %skj\nFragment Mass : %s\nFragment Velocity : %s m/s\nFragment Penetration : %s mm\nFragments : %s"
+			local Blast       = ACF.ConvertHE(BulletData.FillerMass, BulletData.ProjMass - BulletData.FillerMass)
+			local BlastRadius = math.Round(Blast.BlastRadius / 39.37, 2)
+			local FragMass    = ACF.GetProperMass(Blast.FragMass)
+			local FragVel     = math.Round(Blast.FragVel, 2)
+			local FragPen     = math.Round(Blast.FragPen)
 
-			return Text:format(Blast, BulletData.Fragments, FragMass, FragVel)
+			return Text:format(BlastRadius, math.Round(Blast.TotalPower, 2), math.Round(Blast.BlastPower, 2), math.Round(Blast.FragPower, 2), FragMass, FragVel, FragPen, Blast.FragCount)
 		end)
 
 		local PenStats = Base:AddLabel()

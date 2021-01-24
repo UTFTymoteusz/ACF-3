@@ -339,3 +339,35 @@ do -- Ammo crate capacity calculation
 		return Rounds, ExtraData
 	end
 end
+
+function ACF.ConvertHE(FillerMass, ShellMass)
+	local TotalPower  = FillerMass * ACF.HEPower
+	local BlastRadius = FillerMass ^ 0.33 * 16 * 39.37
+	local BlastArea   = 4 * 3.1415 * (BlastRadius * 2.54) ^ 2
+	local BlastRatio  = FillerMass / ShellMass
+	local BlastPower  = TotalPower * BlastRatio
+	local FragPower   = TotalPower - BlastPower
+	local FragCount   = math.max(math.floor(BlastRatio * ACF.HEFrag), 2)
+	local FragMass    = ShellMass / FragCount
+	local FragVel     = (FragPower * 1000 / FragMass / FragCount) ^ 0.5
+	local FragArea    = (FragMass / 7.8) ^ 0.33 * 0.4
+
+	local Energy     = ACF_Kinetic(FragVel, FragMass)
+	local FragPen    = (Energy.Penetration / FragArea) * ACF.KEtoRHA
+	local FragEnergy = Energy.Kinetic
+
+	return {
+		TotalPower = TotalPower,
+		BlastRadius = BlastRadius,
+		BlastArea = BlastArea,
+		BlastPower = BlastPower,
+		BlastRatio = BlastRatio,
+		FragCount = FragCount,
+		FragPower = FragPower,
+		FragMass = FragMass,
+		FragArea = FragArea,
+		FragVel = FragVel,
+		FragPen = FragPen,
+		FragEnergy = FragEnergy
+	}
+end
