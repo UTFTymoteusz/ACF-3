@@ -6,7 +6,6 @@ local TraceData   = { output = TraceRes, mask = MASK_SOLID, filter = false }
 local HookRun     = hook.Run
 local ValidDebris = ACF.ValidDebris
 local ChildDebris = ACF.ChildDebris
-local DragDiv     = ACF.DragDiv
 
 -- Local Funcs ----------------------------------
 
@@ -112,46 +111,57 @@ do -- Explosions ----------------------------
 		end
 	end
 
-	function ACF.HE(Origin, FillerMass, FragMass, Inflictor, Filter, Gun)
+	function ACF.HE(Origin, FillerMass, CaseMass, Inflictor, Filter, Gun)
+		do -- Set up trace data
+			Filter = Filter or {}
+
+			TraceData.filter = Filter
+			TraceData.start  = Origin
+		end
+
+		local Blast = ACF.ConvertHE(FillerMass, CaseMass)
+
+		local TotalPower  = Blast.TotalPower
+		local BlastRadius = Blast.BlastRadius
+		local BlastArea   = Blast.BlastArea
+		local BlastRatio  = Blast.BlastRatio
+		local FragCount   = Blast.FragCount
+		local FragMass    = Blast.FragMass
+		local FragArea    = Blast.FragArea
+		local FragVel     = Blast.FragVel
+
+		local Damage     = {} -- Entities to be damaged
+		local Damaged	 = {} -- Already damaged entities that are filtered out from searches
+		local Ents 		 = ents.FindInSphere(Origin, BlastRadius)
+		local Loop 		 = true -- Whether to more props to damage whenever a prop dies
+
+		local Amp = math.min(TotalPower / 2000, 50)
+		util.ScreenShake(Origin, Amp, Amp, Amp / 15, BlastRadius * 10)
+
 		debugoverlay.Cross(Origin, 15, 15, Color( 255, 255, 255 ), true)
-		Filter = Filter or {}
+		debugoverlay.Sphere(Origin, BlastRadius, 15, Color( 255, 100, 0, 5))
 
-		local Power 	 = FillerMass * ACF.HEPower --Power in KiloJoules of the filler mass of TNT
-		local Radius 	 = FillerMass ^ 0.33 * 8 * 39.37 -- Scaling law found on the net, based on 1PSI overpressure from 1 kg of TNT at 15m
-		local MaxSphere  = 4 * 3.1415 * (Radius * 2.54) ^ 2 --Surface Area of the sphere at maximum radius
-		local Amp 		 = math.min(Power / 2000, 50)
-		local Fragments  = math.max(math.floor((FillerMass / FragMass) * ACF.HEFrag), 2)
-		local FragWeight = FragMass / Fragments
-		local BaseFragV  = (Power * 50000 / FragWeight / Fragments) ^ 0.5
-		local FragArea 	 = (FragWeight / 7.8) ^ 0.33
-		local Damaged	 = {}
-		local Ents 		 = ents.FindInSphere(Origin, Radius)
-		local Loop 		 = true -- Find more props to damage whenever a prop dies
-
-		TraceData.filter = Filter
-		TraceData.start  = Origin
-
-		util.ScreenShake(Origin, Amp, Amp, Amp / 15, Radius * 10)
-
-		while Loop and Power > 0 do
+		while Loop and TotalPower > 0 do
 			Loop = false
 
-			local PowerSpent = 0
-			local Damage 	 = {}
+			for I = #Ents, 1, -1 do -- Find entities to deal damage to
+				local Ent = Ents[I]
 
-			for K, Ent in ipairs(Ents) do -- Find entities to deal damage to
 				if not ACF.Check(Ent) then -- Entity is not valid to ACF
 
-					Ents[K] = nil -- Remove from list
-					Filter[#Filter + 1] = Ent -- Filter from traces
+					table.remove(Ents, I) -- Remove from list
+
+					if IsValid(Ent) then
+						Filter[#Filter + 1] = Ent -- Filter from traces
+					end
 
 					continue
 				end
 
-				if Damage[Ent] then continue end -- A trace sent towards another prop already hit this one instead, no need to check if we can see it
+				if Damaged[Ent] then continue end -- A trace sent towards another prop already hit this one instead, no need to check if we can see it
 
 				if Ent.Exploding then -- Detonate explody things immediately if they're already cooking off
-					Ents[K] = nil
+					table.remove(Ents, I)
 					Filter[#Filter + 1] = Ent
 
 					--Ent:Detonate()
@@ -160,7 +170,7 @@ do -- Explosions ----------------------------
 
 				local IsChar = Ent:IsPlayer() or Ent:IsNPC()
 				if IsChar and Ent:Health() <= 0 then
-					Ents[K] = nil
+					table.remove(Ents, I)
 					Filter[#Filter + 1] = Ent -- Shouldn't need to filter a dead player but we'll do it just in case
 
 					continue
@@ -176,30 +186,24 @@ do -- Explosions ----------------------------
 					Ent = TraceRes.Entity
 
 					if ACF.Check(Ent) then
-						if not Ent.Exploding and not Damage[Ent] and not Damaged[Ent] then -- Hit an entity that we haven't already damaged yet (Note: Damaged != Damage)
+						if not Ent.Exploding and not Damaged[Ent] then -- Hit an entity that we haven't already damaged yet
 							local Mul = IsChar and 0.65 or 1 -- Scale down boxes for players/NPCs because the bounding box is way bigger than they actually are
 
-							debugoverlay.Line(Origin, TraceRes.HitPos, 30, Color(0, 255, 0), true) -- Green line for a hit trace
-							debugoverlay.BoxAngles(Ent:GetPos(), Ent:OBBMins() * Mul, Ent:OBBMaxs() * Mul, Ent:GetAngles(), 30, Color(255, 0, 0, 1))
+							debugoverlay.BoxAngles(Ent:GetPos(), Ent:OBBMins() * Mul, Ent:OBBMaxs() * Mul, Ent:GetAngles(), 30, Color(255, 255, 255, 1))
 
-							local Pos		= Ent:GetPos()
-							local Distance	= Origin:Distance(Pos)
-							local Sphere 	= math.max(4 * 3.1415 * (Distance * 2.54) ^ 2, 1) -- Surface Area of the sphere at the range of that prop
-							local Area 		= math.min(Ent.ACF.Area / Sphere, 0.5) * MaxSphere -- Project the Area of the prop to the Area of the shadow it projects at the explosion max radius
+							if Ents[I] == Ent then
+								table.remove(Ents, I) -- Removed from future damage searches (but may still block LOS)
+							end
 
-							Damage[Ent] = {
-								Dist = Distance,
-								Vec  = (Pos - Origin):GetNormalized(),
-								Area = Area,
-								Index = K
-							}
+							Damaged[Ent] = TraceRes.HitNormal -- This entity can no longer recieve damage from this explosion (also used to pass hitnormal)
+							Damage[Ent]  = true
 
-							Ents[K] = nil -- Removed from future damage searches (but may still block LOS)
+							Ent.HitPos = TraceRes.HitPos
 						end
 					else -- If check on new ent fails
-						--debugoverlay.Line(Origin, TraceRes.HitPos, 30, Color(255, 0, 0)) -- Red line for a invalid ent
+						debugoverlay.Line(Origin, TraceRes.HitPos, 30, Color(255, 0, 0)) -- Red line for a invalid ent
 
-						Ents[K] = nil -- Remove from list
+						table.remove(Ents, K) -- Remove from list
 						Filter[#Filter + 1] = Ent -- Filter from traces
 					end
 				else
@@ -208,44 +212,81 @@ do -- Explosions ----------------------------
 				end
 			end
 
-			for Ent, Table in pairs(Damage) do -- Deal damage to the entities we found
-				local Feathering 	= (1 - math.min(1, Table.Dist / Radius)) ^ ACF.HEFeatherExp
-				local AreaFraction 	= Table.Area / MaxSphere
-				local PowerFraction = Power * AreaFraction -- How much of the total power goes to that prop
-				local AreaAdjusted 	= (Ent.ACF.Area / ACF.Threshold) * Feathering
-				local Blast 		= { Penetration = PowerFraction ^ ACF.HEBlastPen * AreaAdjusted }
-				local BlastRes 		= ACF.Damage(Ent, Blast, AreaAdjusted, 0, Inflictor, 0, Gun, "HE")
-				local FragHit 		= math.floor(Fragments * AreaFraction)
-				local FragVel 		= math.max(BaseFragV - ((Table.Dist / BaseFragV) * BaseFragV ^ 2 * FragWeight ^ 0.33 / 10000) / DragDiv, 0)
-				local FragKE 		= ACF_Kinetic(FragVel, FragWeight * FragHit, 1500)
-				local Losses		= BlastRes.Loss * 0.5
-				local FragRes
+			for Ent in pairs(Damage) do -- Deal damage to the entities we found
+				if TotalPower <= 0 then break end
 
-				if FragHit > 0 then
-					FragRes = ACF.Damage(Ent, FragKE, FragArea * FragHit, 0, Inflictor, 0, Gun, "Frag")
-					Losses 	= Losses + FragRes.Loss * 0.5
+				Damage[Ent] = nil
+
+				local Pos		    = Ent.HitPos
+				local Displacement  = Pos - Origin
+				local Distance	    = Displacement:Length()
+				local ImpactAngle   = ACF_GetHitAngle(Damaged[Ent], Displacement:GetNormalized()) * 0.5 -- This is arbitrary but so is where the trace hit
+				local Sphere 	    = math.max(4 * 3.1415 * (Distance * 2.54) ^ 2, 1) -- Surface Area of the sphere at the range of that prop
+				local Area 		    = math.min(Ent.ACF.Area / Sphere, 0.5) * BlastArea -- Project the Area of the prop to the Area of the shadow it projects at the explosion max radius
+				local Feathering 	= (1 - math.min(1, Distance / BlastRadius)) ^ ACF.HEFeatherExp
+				local AreaFraction 	= Area / BlastArea
+				local PowerFraction = TotalPower * AreaFraction -- How much of the total power goes to that prop
+				local BlastPower    = PowerFraction * BlastRatio
+				local FragPower     = PowerFraction - BlastPower
+				local AreaAdjusted 	= (Ent.ACF.Area / ACF.Threshold) * Feathering
+
+				local FragHit 		= math.floor(FragCount * AreaFraction)
+
+				if FragHit > 0 then -- A fragment hit
+					local FragKE  = ACF_Kinetic(FragVel * (Distance * 0.5 / BlastRadius), FragMass)
+					local FragRes = ACF.Damage(Ent, FragKE, FragArea, ImpactAngle, Inflictor, math.random(0, 10), Gun, "Frag", FragHit)
+
+					TotalPower = TotalPower - FragKE.Kinetic * FragCount * FragRes.Loss -- Removing the energy spent towards this prop
+
+					if FragRes.Kill then -- Killed the ent
+						Filter[#Filter + 1] = Ent -- Filter just in case
+						Loop = true -- Check for new targets since something was killed
+
+						debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 0, 0), true)
+
+						continue
+					else
+						if FragRes.Overkill > 0 then -- Fragment penetrated
+							Filter[#Filter + 1] = Ent -- Filter out penetrated entity
+
+							debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 255, 0), true)
+							Loop = true -- Check for new targets since something was penetrated
+						else
+							debugoverlay.Line(Origin, Ent.HitPos + VectorRand(2), 30, Color(255, 255, 255), true)
+						end
+
+						if ACF.HEPush then
+							Shove(Ent, Origin, Displacement:GetNormalized(), FragPower * FragRes.Loss)
+						end
+					end
 				end
 
-				if (BlastRes and BlastRes.Kill) or (FragRes and FragRes.Kill) then -- We killed something
-					Filter[#Filter + 1] = Ent -- Filter out the dead prop
-					Ents[Table.Index]   = nil -- Don't bother looking for it in the future
+				local BlastDmg = { Penetration = BlastPower ^ ACF.HEBlastPen * AreaAdjusted }
+				local BlastRes = ACF.Damage(Ent, BlastDmg, AreaAdjusted, ImpactAngle, Inflictor, math.random(0, 10), Gun, "HE")
 
-					local Debris = ACF.HEKill(Ent, Table.Vec, PowerFraction, Origin) -- Make some debris
+				TotalPower = TotalPower - BlastPower * BlastRes.Loss
+
+				if BlastRes.Kill then -- Blast killed something
+					Filter[#Filter + 1] = Ent -- Filter out the dead prop
+
+					local Debris = ACF.HEKill(Ent, Displacement:GetNormalized(), BlastPower, Origin) -- Make some debris
 
 					for Fireball in pairs(Debris) do
 						if IsValid(Fireball) then Filter[#Filter + 1] = Fireball end -- Filter that out too
 					end
 
 					Loop = true -- Check for new targets since something died, maybe we'll find something new
-				elseif ACF.HEPush then -- Just damaged, not killed, so push on it some
-					Shove(Ent, Origin, Table.Vec, PowerFraction * 33.3) -- Assuming about 1/30th of the explosive energy goes to propelling the target prop (Power in KJ * 1000 to get J then divided by 33)
+				else
+					if BlastRes.Overkill > 0 then -- Blast penetrated
+						Filter[#Filter + 1] = Ent
+						Loop = true
+					end
+
+					if ACF.HEPush then -- Just damaged, not killed, so push on it some
+						Shove(Ent, Origin, Displacement:GetNormalized(), BlastPower * BlastRes.Loss)
+					end
 				end
-
-				PowerSpent = PowerSpent + PowerFraction * Losses -- Removing the energy spent killing props
-				Damaged[Ent] = true -- This entity can no longer recieve damage from this explosion
 			end
-
-			Power = math.max(Power - PowerSpent, 0)
 		end
 	end
 
