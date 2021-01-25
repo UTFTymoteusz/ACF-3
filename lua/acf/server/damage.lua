@@ -203,7 +203,8 @@ do -- Explosions ----------------------------
 					else -- If check on new ent fails
 						debugoverlay.Line(Origin, TraceRes.HitPos, 30, Color(255, 0, 0)) -- Red line for a invalid ent
 
-						table.remove(Ents, K) -- Remove from list
+						table.remove(Ents, I) -- Remove from list
+
 						Filter[#Filter + 1] = Ent -- Filter from traces
 					end
 				else
