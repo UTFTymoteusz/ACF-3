@@ -56,9 +56,20 @@ end
 
 function SWEP:Initialize()
 	if SERVER then
+		local Area = 3.1416 * 0.25 ^ 2
+
 		self:SetWeaponHoldType("pistol") --"357 hold type doesnt exist, it's the generic pistol one" Kaf
 		self.LastDistance = 0
 		self.LastTrace = {}
+		self.Bullet = {
+			IsTorch = true, -- We need to let people know this isn't a regular bullet somehow
+			Owner   = self:GetOwner(),
+			Gun     = self,
+			Caliber = 0.5,
+			FrArea  = Area,
+			PenArea = Area ^ ACF.PenAreaMod,
+			Energy  = { Kinetic = 5, Momentum = 0, Penetration = 5 },
+		}
 	end
 
 	util.PrecacheSound("ambient/energy/NewSpark03.wav")
@@ -170,8 +181,6 @@ function SWEP:PrimaryAttack()
 	end
 end
 
-local Energy = { Kinetic = 5, Momentum = 0, Penetration = 5 }
-
 function SWEP:SecondaryAttack()
 	self:SetNextPrimaryFire(ACF.CurTime + 0.05)
 
@@ -186,14 +195,9 @@ function SWEP:SecondaryAttack()
 	if ACF.Check(Entity) then
 		local HitRes = {}
 
-		if Entity:IsPlayer() or Entity:IsNPC() then
+		if Entity:IsPlayer() or Entity:IsNPC() or Entity:CPPICanTool(Owner, "torch") then
 			--We can use the damage function instead of direct access here since no numbers are negative.
-			HitRes = ACF_Damage(Entity, Energy, 2, 0, Owner, 0, self, "Torch")
-		else
-			if CPPI and not Entity:CPPICanTool(Owner, "torch") then return end
-
-			--We can use the damage function instead of direct access here since no numbers are negative.
-			HitRes = ACF_Damage(Entity, Energy, 2, 0, Owner, 0, self, "Torch")
+			HitRes = ACF.Damage(self.Bullet, Trace)
 		end
 
 		if HitRes.Kill then
