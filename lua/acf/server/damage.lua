@@ -48,13 +48,13 @@ end
 do -- Explosions ----------------------------
 	local TraceData = { start = true, endpos = true, filter = true, mask = MASK_SOLID }
 	local Bullet = {
-		IsFrag  = true, -- We need to let people know this isn't a regular bullet somehow
-		Owner   = true,
-		Gun     = true,
-		Caliber = true,
-		Energy  = true,
-		PenArea = true,
-		FrArea  = true,
+		IsFrag   = true, -- We need to let people know this isn't a regular bullet somehow
+		Owner    = true,
+		Gun      = true,
+		Caliber  = true,
+		Energy   = true,
+		PenArea  = true,
+		ProjArea = true,
 	}
 
 	local function GetRandomPos(Entity, IsChar)
@@ -210,9 +210,9 @@ do -- Explosions ----------------------------
 					local FragHit = math.floor(FragCount * AreaFraction)
 
 					if FragHit > 0 then -- A fragment hit
-						Bullet.FrArea  = FragArea
-						Bullet.PenArea = FragArea ^ ACF.PenAreaMod
-						Bullet.Energy  = ACF_Kinetic(FragVel * (Distance * 0.5 / BlastRadius), FragMass)
+						Bullet.ProjArea = FragArea
+						Bullet.PenArea  = FragArea ^ ACF.PenAreaMod
+						Bullet.Energy   = ACF_Kinetic(FragVel * (Distance * 0.5 / BlastRadius), FragMass)
 
 						local FragRes = ACF.Damage(Bullet, Trace, FragHit)
 
@@ -245,9 +245,9 @@ do -- Explosions ----------------------------
 				end
 
 				do -- Blast damage
-					Bullet.FrArea  = AreaAdjusted
-					Bullet.PenArea = AreaAdjusted ^ ACF.PenAreaMod
-					Bullet.Energy  = { Penetration = BlastPower ^ ACF.HEBlastPen * AreaAdjusted }
+					Bullet.ProjArea = AreaAdjusted
+					Bullet.PenArea  = AreaAdjusted ^ ACF.PenAreaMod
+					Bullet.Energy   = { Penetration = BlastPower ^ ACF.HEBlastPen * AreaAdjusted }
 
 					local BlastRes = ACF.Damage(Bullet, Trace)
 
