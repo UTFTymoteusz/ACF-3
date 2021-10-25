@@ -1,6 +1,7 @@
 -- Local Vars -----------------------------------
-local ACF     = ACF
-local HookRun = hook.Run
+local ACF        = ACF
+local HookRun    = hook.Run
+local ACF_HEPUSH = CreateConVar("acf_hepush", 1, FCVAR_NONE, "Whether or not HE pushes on entities", 0, 1)
 
 do -- Player syncronization
 	util.AddNetworkString("ACF_RenderDamage")
@@ -47,7 +48,6 @@ do -- KE Shove
 end
 
 do -- Explosions ----------------------------
-	local TraceData = { start = true, endpos = true, mask = MASK_SOLID, filter = false }
 	local Bullet = {
 		IsFrag   = true, -- We need to let people know this isn't a regular bullet somehow
 		Owner    = true,
@@ -64,185 +64,303 @@ do -- Explosions ----------------------------
 		return ACF.Penetration(self.Speed, self.ProjMass, self.Diameter * 10)
 	end
 
-	local function GetRandomPos(Entity, IsChar)
-		if IsChar then
-			local Mins, Maxs = Entity:OBBMins() * 0.65, Entity:OBBMaxs() * 0.65 -- Scale down the "hitbox" since most of the character is in the middle
-			local Rand		 = Vector(math.Rand(Mins[1], Maxs[1]), math.Rand(Mins[2], Maxs[2]), math.Rand(Mins[3], Maxs[3]))
+	local HE do
+		-- boom!
+		-- deals damage to all entities within the blast radius and in line of sight with the explosion
+		-- entities penetrated by the blast are filtered out and those now exposed are also damaged
+		-- entities are dealt damage based on their distance from the explosion
+		-- damage is not reduced by penetration
 
-			return Entity:LocalToWorld(Rand)
-		else
-			local Mesh = Entity:GetPhysicsObject():GetMesh()
+		local check     = ACF.Check
+		local trace     = util.TraceLine -- TODO: Replace with ACF.Trace (which is causing crashes for some reason)
+		local traceRes  = {}
+		local traceData = { start = true, endpos = true, mask = MASK_SOLID, filter = true, output = traceRes }
 
-			if not Mesh then -- Is Make-Sphericaled
-				local Mins, Maxs = Entity:OBBMins(), Entity:OBBMaxs()
-				local Rand		 = Vector(math.Rand(Mins[1], Maxs[1]), math.Rand(Mins[2], Maxs[2]), math.Rand(Mins[3], Maxs[3]))
+		local COLOR_RED    = Color(255, 0, 0)
+		local COLOR_RED_TRANSPARENT = Color(255, 0, 0, 1)
+		local COLOR_DARK   = Color(25, 25, 25, 25) -- hey thats not a real color!
+		local COLOR_GREEN  = Color(0, 255, 0)
+		local COLOR_GREEN_TRANSPARENT = Color(0, 255, 0, 25)
+		local COLOR_YELLOW = Color(255, 255, 0)
+		local COLOR_YELLOW_TRANSPARENT = Color(255, 255, 0, 25)
 
-				return Entity:LocalToWorld(Rand:GetNormalized() * math.Rand(1, Entity:BoundingRadius() * 0.5)) -- Attempt to a random point in the sphere
+		local DEBUG_TIME = 30
+		local traces = 0
+
+		local blast, targets = {}, {} -- tables that will be continually re-used for each HE call
+
+		local function getRandomPos(ent)
+			if ent:IsPlayer() or ent:IsNPC() then
+				-- TODO: Improve this?
+				local point = VectorRand(ent:OBBMins(), ent:OBBMaxs()) * 0.65 -- scaled a bit smaller since most of a player is in the center
+
+				return ent:LocalToWorld(point)
+			elseif ent.IsAmmoCrate then
+				-- we know ammo crates are cuboids, so this simplifies things
+				return ent:LocalToWorld(VectorRand(ent:OBBMins(), ent:OBBMaxs()))
 			else
-				local Rand = math.random(3, #Mesh / 3) * 3
-				local P    = Vector(0, 0, 0)
+				-- for arbitrary models, pick a random triangle on the surface of a model and trace towards a random position on that triangle
 
-				for I = Rand - 2, Rand do P = P + Mesh[I].pos end
+				-- TODO: Add more to the ACF.GetModelMesh to include surface area and such
+				-- this is pretty expensive to run every time, needs to be cached
+				local mesh = ent:GetPhysicsObject():GetMesh()
 
-				return Entity:LocalToWorld(P / 3) -- Attempt to hit a point on a face of the mesh
-			end
-		end
-	end
+				if mesh then
+					-- fancy new mesh table that definitely should be cached and not built every time
+					local newMesh = {
+						surfaceArea = 0,
+						tris = {}
+					}
 
-	-- TODO: Separate this function into multiple chunks, it's absolutely unreadable.
-	function ACF.HE(Origin, FillerMass, FragMass, Inflictor, Filter, Gun)
-		debugoverlay.Cross(Origin, 15, 15, Color( 255, 255, 255 ), true)
-		Filter = Filter or {}
+					-- populate it
+					for i = 1, #mesh, 3 do
+						-- points on triangle
+						local a, b, c = mesh[i].pos, mesh[i + 1].pos, mesh[i + 2].pos
 
-		local Power 	 = FillerMass * ACF.HEPower --Power in KiloJoules of the filler mass of TNT
-		local Radius 	 = FillerMass ^ 0.33 * 8 * 39.37 -- Scaling law found on the net, based on 1PSI overpressure from 1 kg of TNT at 15m
-		local MaxSphere  = 4 * 3.1415 * (Radius * 2.54) ^ 2 --Surface Area of the sphere at maximum radius
-		local Amp 		 = math.min(Power / 2000, 50)
-		local Fragments  = math.max(math.floor((FillerMass / FragMass) * ACF.HEFrag), 2)
-		local FragWeight = FragMass / Fragments
-		local BaseFragV  = (Power * 50000 / FragWeight / Fragments) ^ 0.5
-		local Damaged	 = {}
-		local Ents 		 = ents.FindInSphere(Origin, Radius)
-		local Loop 		 = true -- Find more props to damage whenever a prop dies
+						-- area of triangle
+						local area = (a*b):Cross(a*c):Length() / 2
 
-		TraceData.filter = Filter
-		TraceData.start  = Origin
+						newMesh.surfaceArea = newMesh.surfaceArea + area
+						newMesh.tris[#newMesh.tris + 1] = {
+							points = { a, b, c },
+							area   = area
+						}
+					end
 
-		util.ScreenShake(Origin, Amp, Amp, Amp / 15, Radius * 10)
+					-- sort tris from highest surface area to lowest
+					table.sort(newMesh, function(a, b)
+						return a.area > b.area
+					end)
 
-		-- We only need to set these once
-		Bullet.Owner = Inflictor
-		Bullet.Gun   = Gun
+					-- pick a weighted (by tri area) random triangle
+					-- TODO: upgrade to binary search tree
+					local rand = math.Rand(0, newMesh.surfaceArea)
+					local select
 
-		while Loop and Power > 0 do
-			Loop = false
+					for k, v in ipairs(newMesh.tris) do
+						rand = rand - v.area
 
-			local PowerSpent = 0
-			local Damage 	 = {}
-
-			for K, Ent in ipairs(Ents) do -- Find entities to deal damage to
-				if not ACF.Check(Ent) then -- Entity is not valid to ACF
-
-					Ents[K] = nil -- Remove from list
-					Filter[#Filter + 1] = Ent -- Filter from traces
-
-					continue
-				end
-
-				if Damage[Ent] then continue end -- A trace sent towards another prop already hit this one instead, no need to check if we can see it
-
-				if Ent.Exploding then -- Detonate explody things immediately if they're already cooking off
-					Ents[K] = nil
-					Filter[#Filter + 1] = Ent
-
-					--Ent:Detonate()
-					continue
-				end
-
-				local IsChar = Ent:IsPlayer() or Ent:IsNPC()
-				if IsChar and Ent:Health() <= 0 then
-					Ents[K] = nil
-					Filter[#Filter + 1] = Ent -- Shouldn't need to filter a dead player but we'll do it just in case
-
-					continue
-				end
-
-				local Target = GetRandomPos(Ent, IsChar) -- Try to hit a random spot on the entity
-				local Displ	 = Target - Origin
-
-				TraceData.endpos = Origin + Displ:GetNormalized() * (Displ:Length() + 24)
-
-				local TraceRes = ACF.TraceF(TraceData)
-
-				if TraceRes.HitNonWorld then
-					Ent = TraceRes.Entity
-
-					if ACF.Check(Ent) then
-						if not Ent.Exploding and not Damage[Ent] and not Damaged[Ent] then -- Hit an entity that we haven't already damaged yet (Note: Damaged != Damage)
-							local Mul = IsChar and 0.65 or 1 -- Scale down boxes for players/NPCs because the bounding box is way bigger than they actually are
-
-							debugoverlay.Line(Origin, TraceRes.HitPos, 30, Color(0, 255, 0), true) -- Green line for a hit trace
-							debugoverlay.BoxAngles(Ent:GetPos(), Ent:OBBMins() * Mul, Ent:OBBMaxs() * Mul, Ent:GetAngles(), 30, Color(255, 0, 0, 1))
-
-							local Pos		= Ent:GetPos()
-							local Distance	= Origin:Distance(Pos)
-							local Sphere 	= math.max(4 * 3.1415 * (Distance * 2.54) ^ 2, 1) -- Surface Area of the sphere at the range of that prop
-							local Area 		= math.min(Ent.ACF.Area / Sphere, 0.5) * MaxSphere -- Project the Area of the prop to the Area of the shadow it projects at the explosion max radius
-
-							Damage[Ent] = {
-								Dist  = Distance,
-								Displ = Pos - Origin,
-								Vec   = (Pos - Origin):GetNormalized(),
-								Area  = Area,
-								Index = K,
-								Trace = TraceRes,
-							}
-
-							Ents[K] = nil -- Removed from future damage searches (but may still block LOS)
+						if rand < 0 then
+							select = newMesh.tris[k]
+							break
 						end
-					else -- If check on new ent fails
-						--debugoverlay.Line(Origin, TraceRes.HitPos, 30, Color(255, 0, 0)) -- Red line for a invalid ent
-
-						Ents[K] = nil -- Remove from list
-						Filter[#Filter + 1] = Ent -- Filter from traces
-					end
-				else
-					-- Not removed from future damage sweeps so as to provide multiple chances to be hit
-					debugoverlay.Line(Origin, TraceRes.HitPos, 30, Color(0, 0, 255)) -- Blue line for a miss
-				end
-			end
-
-			-- TODO: Add proper fragment support
-			-- NOTE: Fragments are flying at several km/s
-			for Ent, Table in pairs(Damage) do -- Deal damage to the entities we found
-				local AreaFraction 	= Table.Area / MaxSphere
-				local PowerFraction = Power * AreaFraction -- How much of the total power goes to that prop
-				local Caliber       = math.Rand(0.5, 1) -- Random fragment caliber
-				local ProjArea      = math.pi * (Caliber * 0.5) ^ 2
-				local FragHit 		= math.floor(Fragments * AreaFraction)
-				local FragRes
-
-				Bullet.Caliber  = Caliber
-				Bullet.Diameter = Caliber
-				Bullet.ProjArea = ProjArea * FragHit
-				Bullet.ProjMass = FragWeight * FragHit
-				Bullet.Flight   = Table.Displ
-				Bullet.Speed    = Bullet.Flight:Length() / ACF.Scale * 0.0254
-
-				local BlastRes = ACF.Damage(Bullet, Table.Trace)
-				local Losses   = BlastRes.Loss * 0.5
-
-				if FragHit > 0 then
-					local DragCoef = ProjArea * 0.0002 / Bullet.ProjMass
-
-					Bullet.ProjArea = ProjArea
-					Bullet.Speed    = ACF.GetRangedSpeed(BaseFragV * 0.0254, DragCoef, Table.Dist) -- NOTE: Assuming BaseFragV is on in/s
-
-					FragRes = ACF.Damage(Bullet, Table.Trace)
-					Losses 	= Losses + FragRes.Loss * 0.5
-				end
-
-				if BlastRes.Kill or (FragRes and FragRes.Kill) then -- We killed something
-					Filter[#Filter + 1] = Ent -- Filter out the dead prop
-					Ents[Table.Index]   = nil -- Don't bother looking for it in the future
-
-					local Debris = ACF.HEKill(Ent, Table.Vec, PowerFraction, Origin) -- Make some debris
-
-					for Fireball in pairs(Debris) do
-						if IsValid(Fireball) then Filter[#Filter + 1] = Fireball end -- Filter that out too
 					end
 
-					Loop = true -- Check for new targets since something died, maybe we'll find something new
-				elseif ACF.HEPush then -- Just damaged, not killed, so push on it some
-					ACF.KEShove(Ent, Origin, Table.Vec, PowerFraction * 33.3) -- Assuming about 1/30th of the explosive energy goes to propelling the target prop (Power in KJ * 1000 to get J then divided by 33)
+					-- pick a random point inside the selected triangle
+					local a, b, c = select.points[1], select.points[2], select.points[3]
+
+					local r1, r2 = math.Rand(0, 1), math.Rand(0, 1)
+					if r1 + r2 >= 1 then r1, r2 = 1 - r1, 1 - r2 end
+
+					local point = a + r1 * (b - a) + r2 * (c - a)
+
+					--debugoverlay.Cross(ent:LocalToWorld(point), 3, 5, Color(0, 255, 160), true)
+					return ent:LocalToWorld(point)
+				else -- make-spherical
+					-- pick a random point inside sphere
+					local point = VectorRand():GetNormalized() * math.Rand(0, ent:BoundingRadius())
+
+					return ent:LocalToWorld(point)
 				end
-
-				PowerSpent = PowerSpent + PowerFraction * Losses -- Removing the energy spent killing props
-				Damaged[Ent] = true -- This entity can no longer recieve damage from this explosion
 			end
-
-			Power = math.max(Power - PowerSpent, 0)
 		end
+
+		local canSee do
+			-- attempts to acquire line of sight on an entity by tracing towards a random position on the model
+			-- returns:
+			--		ENTITY: the entity being hit by the trace (nonworld, any valid ACF entity) or false
+			--		BOOL: if the entity hit by the trace was the intended target
+			--		VECTOR: hit position of the trace
+
+			local attempts = 2
+			local padding  = 12 -- distance to trace past intended target
+
+			function canSee(origin, ent)
+				for _ = 1, attempts do
+					local pos = getRandomPos(ent)
+
+					traceData.endpos = pos + (pos - origin):GetNormalized() * padding
+
+					trace(traceData)
+					traces = traces + 1
+					local hitEnt = traceRes.HitNonWorld and traceRes.Entity or ent -- not hitting anything counts as hitting the intended target
+
+					if traceRes.HitWorld then continue end -- failed: hit world
+					if hitEnt ~= ent then
+						if not check(hitEnt) then continue end -- failed: hit bad entity -- perf concern here with ACF.Check being called on the same ents repeatedly
+					end
+
+					return hitEnt, hitEnt == ent, traceRes.HitPos
+				end
+
+				return false,  hitEnt == ent, traceRes.HitPos
+			end
+		end
+
+		local function debugColor(ent, color)
+			if not GetConVar("developer"):GetBool() then return end
+
+			ent._colorRestore    = ent._colorRestore or ent:GetColor()
+			ent._materialRestore = ent._materialRestore or ent:GetMaterial()
+
+			ent:SetColor(color)
+			ent:SetMaterial("models/debug/debugwhite")
+
+			timer.Create(ent:EntIndex() .. " debugcolor", DEBUG_TIME, 1, function()
+				if IsValid(ent) then
+					ent:SetColor(ent._colorRestore)
+					ent:SetMaterial(ent._materialRestore)
+
+					ent._materialRestore = nil
+					ent._colorRestore    = nil
+				end
+			end)
+		end
+
+		local function getTargets(filter)
+			-- finds all entities in a radius around the blast center
+			-- filters out acf-invalid entities and dead players/npcs
+			-- updates the 'targets' table with a table of entities stored in occluder:{occluded} pairs
+
+			local list   = ents.FindInSphere(blast.pos, blast.radius)
+			local out    = {}
+			local lookup = {}; for k, v in pairs(filter) do lookup[v] = k end
+
+			for _, testEnt in pairs(list) do
+				if lookup[testEnt] then continue end -- already filtered
+				if not check(testEnt) or (testEnt:IsPlayer() or testEnt:IsNPC()) and testEnt:Health() <= 0 then -- filter out acf-invalid entities and dead players/npcs
+					filter[#filter + 1] = testEnt
+					lookup[testEnt] = true
+				else
+					-- valid target
+					-- check to see what's in the way
+					local hitEnt, hitIntended, hitPos = canSee(blast.pos, testEnt)
+
+					if hitEnt then
+						-- hit a valid entity
+						-- hitEnt will always be an entity on the outside of the vehicle directly visible to the explosion
+						-- if hitEnt is not the intended target then testEnt is being occluded by hitEnt
+
+						out[hitEnt] = out[hitEnt] or {}
+
+						if not hitIntended then
+							out[hitEnt][testEnt] = true
+						end
+					end
+				end
+			end
+
+			targets.all     = out
+			targets.damaged = {}
+		end
+
+		local function damageTargets()
+			-- damages all ents visible to the explosion
+			-- if an occluder is destroyed or penetrated: filter it from traces and attempt to damage it's occluded entities
+			-- if an occluded entity is destroyed or penetrated: filter it, remove from the list of ocludded entities, and try again
+
+			for ent, occluded in pairs(targets.all) do
+				-- looping over all of the occluders, the entities immediately visible to the explosion
+				-- everything can only be damaged once
+				if targets.damaged[ent] then continue end
+				targets.damaged[ent] = true
+
+				if blast.pen >= ent.ACF.Armour or blast.dmg >= ent.ACF.Health then
+					-- target was penetrated or destroyed
+					-- filter from future traces then damage the now-visible entities
+
+					traceData.filter[#traceData.filter + 1] = ent
+
+					-- reduce the penetration applied to subsequent targets
+					local pen = blast.pen - ent.ACF.Armour
+					local dmg = blast.dmg -- ent.ACF.Health
+					local rep = true
+
+					-- go through the list of entities that are now visible through the hole just made
+					-- the ents aren't necessarily in the order they appear to the explosion and there also may be other entities in the way
+					-- so, this section repeats until every entity has been damaged, all penetration power has been used, or no more entities are visible
+					while rep and next(occluded) do
+						rep = false
+
+						for subEnt in pairs(occluded) do
+							if targets.damaged[subEnt] then continue end
+							if targets.all[subEnt] then continue end -- skip occluders, they'll have their chance
+
+							local hitEnt, hitIntended, hitPos = canSee(blast.pos, subEnt)
+
+							if hitEnt and not targets.damaged[hitEnt] then
+								targets.damaged[hitEnt] = true
+
+								if pen >= hitEnt.ACF.Armour or dmg >= hitEnt.ACF.Health then
+									pen = blast.pen - ent.ACF.Armour
+
+									debugColor(hitEnt, COLOR_RED)
+									debugoverlay.Line(blast.pos, hitEnt:GetPos(), DEBUG_TIME, COLOR_YELLOW, true)
+									--debugoverlay.Text(hitEnt:GetPos(), "Penetrated!", DEBUG_TIME, true)
+
+									if pen > 0 then -- if there is penetration left, keep going
+										rep = true
+
+										traceData.filter[#traceData.filter + 1] = hitEnt
+
+										if hitIntended then
+											table.remove(occluded, idx)
+										end
+									else
+										-- out of penetration power!
+										goto BREAK
+									end
+								else
+									debugColor(hitEnt, COLOR_YELLOW)
+									break
+								end
+							end
+						end
+					end
+
+					::BREAK::
+
+					debugColor(ent, COLOR_RED)
+					debugoverlay.Line(blast.pos, ent:GetPos(), DEBUG_TIME, COLOR_GREEN, true)
+					--debugoverlay.Text(ent:GetPos(), "Penetrated!", DEBUG_TIME, true)
+				else
+					debugColor(ent, COLOR_YELLOW)
+				end
+			end
+		end
+
+		function HE(pos, filler, filter, dmginfo)
+			traces = 0
+			filter = filter or {}
+
+			blast.pos     = pos
+			blast.power   = filler * ACF.HEPower -- Power in KJ
+			blast.radius  = filler ^ 0.33 * 8 * 39.37
+			blast.radius2 = blast.radius ^ 2
+			blast.area    = 4 * 3.1415 * (blast.radius * 2.54) ^ 2 -- Blast surface area
+			blast.dmg     = filler * 0.5
+			blast.pen     = filler / 1
+
+			print("Blast Damage: " .. blast.dmg)
+			print("Blast Penetration: " .. blast.pen)
+
+			traceData.filter = filter
+			traceData.start  = pos
+
+			getTargets(filter)
+			damageTargets()
+
+			if hook.Run("acf.damage.screenshake") ~= false then
+				local amp = math.min(blast.power / 2000, 50)
+				--util.ScreenShake(blast.pos, amp, amp, amp, blast.radius * 10)
+			end
+
+			print("Total traces used: " .. traces)
+			debugoverlay.Cross(blast.pos, blast.radius, DEBUG_TIME, Color(255,255,255), true)
+			debugoverlay.Sphere(blast.pos, blast.radius, DEBUG_TIME, COLOR_RED_TRANSPARENT, false)
+		end
+
+		ACF.HE = HE
 	end
 
 	ACF_HE = ACF.HE
@@ -265,7 +383,7 @@ do -- Overpressure --------------------------
 	end
 
 	local function CanSee(Target, Data)
-		local R = ACF.TraceF(Data)
+		local R = ACF.Trace(Data)
 
 		return R.Entity == Target or not R.Hit or R.Entity == GetVehicle(Target)
 	end
