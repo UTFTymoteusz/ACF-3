@@ -372,6 +372,35 @@ do -- Model convex mesh and volume
 		return Entity
 	end
 
+	local function buildTriMesh(physObj)
+		-- super fancy triangle meshes instead of points
+
+		local mesh        = physObj:GetMesh()
+		local tris        = {}
+		local surfaceArea = 0
+
+		for i = 1, #mesh, 3 do
+			-- points on triangle
+			local a, b, c = mesh[i].pos, mesh[i + 1].pos, mesh[i + 2].pos
+
+			-- area of triangle
+			local area = (a*b):Cross(a*c):Length() / 2
+
+			surfaceArea     = surfaceArea + area
+			tris[#tris + 1] = {
+				points = { a, b, c },
+				area   = area
+			}
+		end
+
+		-- sort tris from highest surface area to lowest
+		table.sort(tris, function(a, b)
+			return a.area > b.area
+		end)
+
+		return tris, surfaceArea
+	end
+
 	local function GetModelData(Model)
 		if not isstring(Model) then return end
 		if IsUselessModel(Model) then return end
@@ -389,14 +418,19 @@ do -- Model convex mesh and volume
 		if not IsValid(PhysObj) then return end
 
 		local Min, Max = PhysObj:GetAABB()
+		local mesh     = PhysObj:GetMesh()
+
+		local tris, surfaceArea = buildTriMesh(PhysObj)
 
 		Data = {
-			Mesh   = PhysObj:GetMeshConvexes(),
-			Volume = PhysObj:GetVolume(),
-			Center = (Max + Min) * 0.5,
-			Size   = Max - Min,
-			Min    = Min,
-			Max    = Max,
+			Mesh        = PhysObj:GetMeshConvexes(),
+			Volume      = PhysObj:GetVolume(),
+			Center      = (Max + Min) * 0.5,
+			Size        = Max - Min,
+			Min         = Min,
+			Max         = Max,
+			surfaceArea = surfaceArea,
+			tris        = tris
 		}
 
 		Models[Model] = Data
@@ -483,6 +517,15 @@ do -- Model convex mesh and volume
 		end
 
 		return Data.Size * Scale
+	end
+
+	-- TODO: Add scaling support
+	function ACF.GetModelTris(Model)
+		local Data = GetModelData(Model)
+
+		if not Data then return end
+
+		return Data.tris, Data.surfaceArea
 	end
 end
 

@@ -72,10 +72,12 @@ do -- Explosions ----------------------------
 		-- damage is not reduced by penetration
 
 		local check     = ACF.Check
+		local rand      = math.Rand
 		local trace     = util.TraceLine -- TODO: Replace with ACF.Trace (which is causing crashes for some reason)
 		local traceRes  = {}
 		local traceData = { start = true, endpos = true, mask = MASK_SOLID, filter = true, output = traceRes }
 
+		local COLOR_WHITE  = Color(255, 255, 255)
 		local COLOR_RED    = Color(255, 0, 0)
 		local COLOR_RED_TRANSPARENT = Color(255, 0, 0, 1)
 		local COLOR_DARK   = Color(25, 25, 25, 25) -- hey thats not a real color!
@@ -99,49 +101,22 @@ do -- Explosions ----------------------------
 				-- we know ammo crates are cuboids, so this simplifies things
 				return ent:LocalToWorld(VectorRand(ent:OBBMins(), ent:OBBMaxs()))
 			else
-				-- for arbitrary models, pick a random triangle on the surface of a model and trace towards a random position on that triangle
-
-				-- TODO: Add more to the ACF.GetModelMesh to include surface area and such
-				-- this is pretty expensive to run every time, needs to be cached
 				local mesh = ent:GetPhysicsObject():GetMesh()
 
 				if mesh then
-					-- fancy new mesh table that definitely should be cached and not built every time
-					local newMesh = {
-						surfaceArea = 0,
-						tris = {}
-					}
-
-					-- populate it
-					for i = 1, #mesh, 3 do
-						-- points on triangle
-						local a, b, c = mesh[i].pos, mesh[i + 1].pos, mesh[i + 2].pos
-
-						-- area of triangle
-						local area = (a*b):Cross(a*c):Length() / 2
-
-						newMesh.surfaceArea = newMesh.surfaceArea + area
-						newMesh.tris[#newMesh.tris + 1] = {
-							points = { a, b, c },
-							area   = area
-						}
-					end
-
-					-- sort tris from highest surface area to lowest
-					table.sort(newMesh, function(a, b)
-						return a.area > b.area
-					end)
+					-- for arbitrary models, pick a random triangle on the surface of a model and trace towards a random position on that triangle
+					local modelTris, modelArea = ACF.GetModelTris(ent:GetModel())
 
 					-- pick a weighted (by tri area) random triangle
 					-- TODO: upgrade to binary search tree
-					local rand = math.Rand(0, newMesh.surfaceArea)
+					local rand = rand(0, modelArea)
 					local select
 
-					for k, v in ipairs(newMesh.tris) do
+					for k, v in ipairs(modelTris) do
 						rand = rand - v.area
 
 						if rand < 0 then
-							select = newMesh.tris[k]
+							select = modelTris[k]
 							break
 						end
 					end
@@ -217,19 +192,19 @@ do -- Explosions ----------------------------
 			end)
 		end
 
-		local function getTargets(filter)
+		local function getTargets()
 			-- finds all entities in a radius around the blast center
 			-- filters out acf-invalid entities and dead players/npcs
 			-- updates the 'targets' table with a table of entities stored in occluder:{occluded} pairs
 
 			local list   = ents.FindInSphere(blast.pos, blast.radius)
 			local out    = {}
-			local lookup = {}; for k, v in pairs(filter) do lookup[v] = k end
+			local lookup = {}; for k, v in pairs(blast.filter) do lookup[v] = k end
 
 			for _, testEnt in pairs(list) do
 				if lookup[testEnt] then continue end -- already filtered
-				if not check(testEnt) or (testEnt:IsPlayer() or testEnt:IsNPC()) and testEnt:Health() <= 0 then -- filter out acf-invalid entities and dead players/npcs
-					filter[#filter + 1] = testEnt
+				if not check(testEnt) or (testEnt:IsPlayer() or testEnt:IsNPC()) and testEnt:Health() <= 0 then
+					blast.filter[#blast.filter + 1] = testEnt
 					lookup[testEnt] = true
 				else
 					-- valid target
@@ -257,7 +232,7 @@ do -- Explosions ----------------------------
 		local function damageTargets()
 			-- damages all ents visible to the explosion
 			-- if an occluder is destroyed or penetrated: filter it from traces and attempt to damage it's occluded entities
-			-- if an occluded entity is destroyed or penetrated: filter it, remove from the list of ocludded entities, and try again
+			-- if an occluded entity is destroyed or penetrated: filter it, remove from the list of occludded entities, and try again
 
 			for ent, occluded in pairs(targets.all) do
 				-- looping over all of the occluders, the entities immediately visible to the explosion
@@ -340,6 +315,7 @@ do -- Explosions ----------------------------
 			blast.area    = 4 * 3.1415 * (blast.radius * 2.54) ^ 2 -- Blast surface area
 			blast.dmg     = filler * 0.5
 			blast.pen     = filler / 1
+			blast.filter  = filter
 
 			print("Blast Damage: " .. blast.dmg)
 			print("Blast Penetration: " .. blast.pen)
@@ -347,8 +323,10 @@ do -- Explosions ----------------------------
 			traceData.filter = filter
 			traceData.start  = pos
 
-			getTargets(filter)
+			local time = SysTime()
+			getTargets()
 			damageTargets()
+			print("Calc time: " .. string.format("%.F", (SysTime() - time) * 1000))
 
 			if hook.Run("acf.damage.screenshake") ~= false then
 				local amp = math.min(blast.power / 2000, 50)
@@ -356,7 +334,7 @@ do -- Explosions ----------------------------
 			end
 
 			print("Total traces used: " .. traces)
-			debugoverlay.Cross(blast.pos, blast.radius, DEBUG_TIME, Color(255,255,255), true)
+			debugoverlay.Cross(blast.pos, blast.radius, DEBUG_TIME, COLOR_WHITE, true)
 			debugoverlay.Sphere(blast.pos, blast.radius, DEBUG_TIME, COLOR_RED_TRANSPARENT, false)
 		end
 
