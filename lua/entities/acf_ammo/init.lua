@@ -230,7 +230,7 @@ do -- Spawning and Updating --------------------
 	end)
 
 	hook.Add("ACF_CanUpdateEntity", "ACF Crate Size Update", function(Entity, Data)
-		if not Entity.IsAmmoCrate then return end
+		if not Entity.IsACFAmmoCrate then return end
 		if Data.Size then return end -- The menu won't send it like this
 
 		Data.Size       = Entity:GetSize()
@@ -343,6 +343,9 @@ do -- Spawning and Updating --------------------
 		local Ammo       = AmmoTypes[Data.AmmoType]
 		local Blacklist  = Ammo.Blacklist
 		local Extra      = ""
+
+		local CanUpdate, Reason = HookRun("ACF_PreEntityUpdate", "acf_ammo", self, Data, Class, Weapon, Ammo)
+		if CanUpdate == false then return CanUpdate, Reason end
 
 		if OldClass.OnLast then
 			OldClass.OnLast(self, OldClass)

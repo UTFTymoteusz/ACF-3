@@ -11,7 +11,10 @@ function ENT:Initialize()
 
 	self.Initialized = true
 
-	self:GetOriginalSize() -- Instantly requesting ScaleData and Scale
+	-- Instantly requesting ScaleData and Scale
+	if not Standby[self] then
+		Network.Send("ACF_Scalable_Entity", self)
+	end
 end
 
 function ENT:CalcAbsolutePosition() -- Faking sync
@@ -151,6 +154,7 @@ Network.CreateReceiver("ACF_Scalable_Entity", function(Data)
 		local Entity = ents.GetByIndex(Index)
 
 		if not IsValid(Entity) then continue end
+		if not Entity.IsScalable then continue end
 
 		local Scale = Info.Scale
 
